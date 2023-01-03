@@ -119,7 +119,13 @@ ARG RUNTIME_PACKAGES="\
 # Install basic runtime packages.
 # These change very infrequently
 RUN set -eux \
-  echo "Installing system packages" \
+  echo "Setting up tesseract 5 APT" \
+    && apt-get update \
+    && apt-get install --yes --quiet --no-install-recommends apt-transport-https curl gnupg \
+    && curl --silent --show-error https://notesalexp.org/debian/alexp_key.asc --output /etc/apt/trusted.gpg.d/alexp_key.asc \
+    && echo "deb [signed-by=/etc/apt/trusted.gpg.d/alexp_key.asc] https://notesalexp.org/tesseract-ocr5/bullseye/ bullseye main" > /etc/apt/sources.list.d/tesseract.list \
+    && apt-get update \
+  && echo "Installing system packages" \
     && apt-get update \
     && apt-get install --yes --quiet --no-install-recommends ${RUNTIME_PACKAGES} \
     && rm -rf /var/lib/apt/lists/* \
