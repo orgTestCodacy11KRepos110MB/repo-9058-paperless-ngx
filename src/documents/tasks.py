@@ -3,10 +3,9 @@ import logging
 import os
 import shutil
 import uuid
-from pathlib import Path
+from typing import Dict
 from typing import Type
 
-import dateutil.parser
 import tqdm
 from asgiref.sync import async_to_sync
 from celery import shared_task
@@ -21,6 +20,8 @@ from documents.classifier import DocumentClassifier
 from documents.classifier import load_classifier
 from documents.consumer import Consumer
 from documents.consumer import ConsumerError
+from documents.data import ConsumeDocument
+from documents.data import DocumentOverrides
 from documents.file_handling import create_source_path_directory
 from documents.file_handling import generate_unique_filename
 from documents.models import Correspondent
@@ -87,28 +88,13 @@ def train_classifier():
 
 @shared_task
 def consume_file(
-    path,
-    override_filename=None,
-    override_title=None,
-    override_correspondent_id=None,
-    override_document_type_id=None,
-    override_tag_ids=None,
-    task_id=None,
-    override_created=None,
+    input_doc: Dict,
+    overrides: Dict,
 ):
 
-    path = Path(path).resolve()
-    asn = None
-
-    # Celery converts this to a string, but everything expects a datetime
-    # Long term solution is to not use JSON for the serializer but pickle instead
-    # TODO: This will be resolved in kombu 5.3, expected with celery 5.3
-    # More types will be retained through JSON encode/decode
-    if override_created is not None and isinstance(override_created, str):
-        try:
-            override_created = dateutil.parser.isoparse(override_created)
-        except Exception:
-            pass
+    # Deserialize from the basic types dict back to an object
+    input_doc: ConsumeDocument = ConsumeDocument.from_dict(input_doc)
+    overrides: DocumentOverrides = DocumentOverrides.from_dict(overrides)
 
     # read all barcodes in the current document
     if settings.CONSUMER_ENABLE_BARCODES or settings.CONSUMER_ENABLE_ASN_BARCODE:
@@ -184,21 +170,20 @@ def consume_file(
 
         # try reading the ASN from barcode
         if settings.CONSUMER_ENABLE_ASN_BARCODE:
-            asn = barcodes.get_asn_from_barcodes(doc_barcode_info.barcodes)
-            if asn:
+            overrides.asn = barcodes.get_asn_from_barcodes(doc_barcode_info.barcodes)
+            if overrides.asn:
                 logger.info(f"Found ASN in barcode: {asn}")
 
     # continue with consumption if no barcode was found
     document = Consumer().try_consume_file(
-        path,
-        override_filename=override_filename,
-        override_title=override_title,
-        override_correspondent_id=override_correspondent_id,
-        override_document_type_id=override_document_type_id,
-        override_tag_ids=override_tag_ids,
-        task_id=task_id,
-        override_created=override_created,
-        override_asn=asn,
+        input_doc.path,
+        override_filename=overrides.filename,
+        override_title=overrides.title,
+        override_correspondent_id=overrides.correspondent_id,
+        override_document_type_id=overrides.document_type_id,
+        override_tag_ids=overrides.tag_ids,
+        override_created=overrides.created,
+        override_asn=overrides.asn,
     )
 
     if document:
