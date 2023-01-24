@@ -1,6 +1,7 @@
 import filecmp
 import os
 import shutil
+from pathlib import Path
 from threading import Thread
 from time import sleep
 from unittest import mock
@@ -11,6 +12,8 @@ from django.core.management import CommandError
 from django.test import override_settings
 from django.test import TransactionTestCase
 from documents.consumer import ConsumerError
+from documents.data import ConsumeDocument
+from documents.data import DocumentOverrides
 from documents.management.commands import document_consumer
 from documents.models import Tag
 from documents.tests.utils import DirectoriesMixin
@@ -37,7 +40,9 @@ def chunked(size, source):
 
 class ConsumerMixin:
 
-    sample_file = os.path.join(os.path.dirname(__file__), "samples", "simple.pdf")
+    sample_file: Path = (
+        Path(__file__).parent / Path("samples") / Path("simple.pdf")
+    ).resolve()
 
     def setUp(self) -> None:
         super().setUp()
@@ -76,8 +81,16 @@ class ConsumerMixin:
 
     # A bogus async_task that will simply check the file for
     # completeness and raise an exception otherwise.
-    def bogus_task(self, filename, **kwargs):
-        eq = filecmp.cmp(filename, self.sample_file, shallow=False)
+    def bogus_task(
+        self,
+        input_doc,
+        overrides=None,
+    ):
+        input_doc: ConsumeDocument = ConsumeDocument.from_dict(input_doc)
+        overrides: DocumentOverrides = (
+            DocumentOverrides.from_dict(overrides) if overrides else DocumentOverrides()
+        )
+        eq = filecmp.cmp(input_doc.original_file, self.sample_file, shallow=False)
         if not eq:
             print("Consumed an INVALID file.")
             raise ConsumerError("Incomplete File READ FAILED")
@@ -107,15 +120,18 @@ class TestConsumer(DirectoriesMixin, ConsumerMixin, TransactionTestCase):
     def test_consume_file(self):
         self.t_start()
 
-        f = os.path.join(self.dirs.consumption_dir, "my_file.pdf")
+        f = Path(os.path.join(self.dirs.consumption_dir, "my_file.pdf"))
         shutil.copy(self.sample_file, f)
 
         self.wait_for_task_mock_call()
 
         self.task_mock.assert_called_once()
 
-        args, kwargs = self.task_mock.call_args
-        self.assertEqual(args[0], f)
+        args, _ = self.task_mock.call_args
+        input_doc, _ = args
+        input_doc: ConsumeDocument = ConsumeDocument.from_dict(input_doc)
+
+        self.assertEqual(input_doc.original_file, f)
 
     def test_consume_file_invalid_ext(self):
         self.t_start()
@@ -128,14 +144,17 @@ class TestConsumer(DirectoriesMixin, ConsumerMixin, TransactionTestCase):
         self.task_mock.assert_not_called()
 
     def test_consume_existing_file(self):
-        f = os.path.join(self.dirs.consumption_dir, "my_file.pdf")
+        f = Path(os.path.join(self.dirs.consumption_dir, "my_file.pdf"))
         shutil.copy(self.sample_file, f)
 
         self.t_start()
         self.task_mock.assert_called_once()
 
-        args, kwargs = self.task_mock.call_args
-        self.assertEqual(args[0], f)
+        args, _ = self.task_mock.call_args
+        input_doc, _ = args
+        input_doc: ConsumeDocument = ConsumeDocument.from_dict(input_doc)
+
+        self.assertEqual(input_doc.original_file, f)
 
     @mock.patch("documents.management.commands.document_consumer.logger.error")
     def test_slow_write_pdf(self, error_logger):
@@ -144,7 +163,7 @@ class TestConsumer(DirectoriesMixin, ConsumerMixin, TransactionTestCase):
 
         self.t_start()
 
-        fname = os.path.join(self.dirs.consumption_dir, "my_file.pdf")
+        fname = Path(os.path.join(self.dirs.consumption_dir, "my_file.pdf"))
 
         self.slow_write_file(fname)
 
@@ -154,8 +173,11 @@ class TestConsumer(DirectoriesMixin, ConsumerMixin, TransactionTestCase):
 
         self.task_mock.assert_called_once()
 
-        args, kwargs = self.task_mock.call_args
-        self.assertEqual(args[0], fname)
+        args, _ = self.task_mock.call_args
+        input_doc, _ = args
+        input_doc: ConsumeDocument = ConsumeDocument.from_dict(input_doc)
+
+        self.assertEqual(input_doc.original_file, fname)
 
     @mock.patch("documents.management.commands.document_consumer.logger.error")
     def test_slow_write_and_move(self, error_logger):
@@ -164,8 +186,8 @@ class TestConsumer(DirectoriesMixin, ConsumerMixin, TransactionTestCase):
 
         self.t_start()
 
-        fname = os.path.join(self.dirs.consumption_dir, "my_file.~df")
-        fname2 = os.path.join(self.dirs.consumption_dir, "my_file.pdf")
+        fname = Path(os.path.join(self.dirs.consumption_dir, "my_file.~df"))
+        fname2 = Path(os.path.join(self.dirs.consumption_dir, "my_file.pdf"))
 
         self.slow_write_file(fname)
         shutil.move(fname, fname2)
@@ -174,8 +196,11 @@ class TestConsumer(DirectoriesMixin, ConsumerMixin, TransactionTestCase):
 
         self.task_mock.assert_called_once()
 
-        args, kwargs = self.task_mock.call_args
-        self.assertEqual(args[0], fname2)
+        args, _ = self.task_mock.call_args
+        input_doc, _ = args
+        input_doc: ConsumeDocument = ConsumeDocument.from_dict(input_doc)
+
+        self.assertEqual(input_doc.original_file, fname2)
 
         error_logger.assert_not_called()
 
@@ -186,14 +211,18 @@ class TestConsumer(DirectoriesMixin, ConsumerMixin, TransactionTestCase):
 
         self.t_start()
 
-        fname = os.path.join(self.dirs.consumption_dir, "my_file.pdf")
+        fname = Path(os.path.join(self.dirs.consumption_dir, "my_file.pdf"))
         self.slow_write_file(fname, incomplete=True)
 
         self.wait_for_task_mock_call()
 
         self.task_mock.assert_called_once()
-        args, kwargs = self.task_mock.call_args
-        self.assertEqual(args[0], fname)
+
+        args, _ = self.task_mock.call_args
+        input_doc, _ = args
+        input_doc: ConsumeDocument = ConsumeDocument.from_dict(input_doc)
+
+        self.assertEqual(input_doc.original_file, fname)
 
         # assert that we have an error logged with this invalid file.
         error_logger.assert_called_once()
@@ -240,10 +269,13 @@ class TestConsumer(DirectoriesMixin, ConsumerMixin, TransactionTestCase):
 
         self.assertEqual(2, self.task_mock.call_count)
 
-        fnames = [
-            os.path.basename(args[0]) for args, _ in self.task_mock.call_args_list
-        ]
-        self.assertCountEqual(fnames, ["my_file.pdf", "my_second_file.pdf"])
+        consumed_files = []
+        for args, _ in self.task_mock.call_args_list:
+            input_doc, _ = args
+            input_doc: ConsumeDocument = ConsumeDocument.from_dict(input_doc)
+            consumed_files.append(input_doc.original_file.name)
+
+        self.assertCountEqual(consumed_files, ["my_file.pdf", "my_second_file.pdf"])
 
     def test_is_ignored(self):
         test_paths = [
@@ -324,7 +356,7 @@ class TestConsumerTags(DirectoriesMixin, ConsumerMixin, TransactionTestCase):
 
         path = os.path.join(self.dirs.consumption_dir, *tag_names)
         os.makedirs(path, exist_ok=True)
-        f = os.path.join(path, "my_file.pdf")
+        f = Path(os.path.join(path, "my_file.pdf"))
         # Wait at least inotify read_delay for recursive watchers
         # to be created for the new directories
         sleep(1)
@@ -337,13 +369,17 @@ class TestConsumerTags(DirectoriesMixin, ConsumerMixin, TransactionTestCase):
         # Add the pk of the Tag created by _consume()
         tag_ids.append(Tag.objects.get(name=tag_names[1]).pk)
 
-        args, kwargs = self.task_mock.call_args
-        self.assertEqual(args[0], f)
+        args, _ = self.task_mock.call_args
+        input_doc, overrides = args
+        input_doc: ConsumeDocument = ConsumeDocument.from_dict(input_doc)
+        overrides: DocumentOverrides = DocumentOverrides.from_dict(overrides)
+
+        self.assertEqual(input_doc.original_file, f)
 
         # assertCountEqual has a bad name, but test that the first
         # sequence contains the same elements as second, regardless of
         # their order.
-        self.assertCountEqual(kwargs["override_tag_ids"], tag_ids)
+        self.assertCountEqual(overrides.tag_ids, tag_ids)
 
     @override_settings(
         CONSUMER_POLLING=1,
