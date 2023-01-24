@@ -1,9 +1,9 @@
 import hashlib
 import logging
-import os
 import shutil
 import uuid
 from typing import Dict
+from typing import Optional
 from typing import Type
 
 import tqdm
@@ -22,6 +22,7 @@ from documents.consumer import Consumer
 from documents.consumer import ConsumerError
 from documents.data import ConsumeDocument
 from documents.data import DocumentOverrides
+from documents.data import DocumentSource
 from documents.file_handling import create_source_path_directory
 from documents.file_handling import generate_unique_filename
 from documents.models import Correspondent
@@ -89,16 +90,21 @@ def train_classifier():
 @shared_task
 def consume_file(
     input_doc: Dict,
-    overrides: Dict,
+    overrides: Optional[Dict] = None,
 ):
 
-    # Deserialize from the basic types dict back to an object
+    # Deserialize from the basic types dict back to an object with nice types
     input_doc: ConsumeDocument = ConsumeDocument.from_dict(input_doc)
-    overrides: DocumentOverrides = DocumentOverrides.from_dict(overrides)
+    overrides: DocumentOverrides = (
+        DocumentOverrides.from_dict(overrides) if overrides else DocumentOverrides()
+    )
 
     # read all barcodes in the current document
     if settings.CONSUMER_ENABLE_BARCODES or settings.CONSUMER_ENABLE_ASN_BARCODE:
-        doc_barcode_info = barcodes.scan_file_for_barcodes(path)
+        doc_barcode_info = barcodes.scan_file_for_barcodes(
+            input_doc.path,
+            input_doc.mime_type,
+        )
 
         # split document by separator pages, if enabled
         if settings.CONSUMER_ENABLE_BARCODES:
@@ -106,7 +112,7 @@ def consume_file(
 
             if len(separators) > 0:
                 logger.debug(
-                    f"Pages with separators found in: {str(path)}",
+                    f"Pages with separators found in: {input_doc.path}",
                 )
                 document_list = barcodes.separate_pages(
                     doc_barcode_info.pdf_path,
@@ -117,8 +123,8 @@ def consume_file(
                     for n, document in enumerate(document_list):
                         # save to consumption dir
                         # rename it to the original filename  with number prefix
-                        if override_filename:
-                            newname = f"{str(n)}_" + override_filename
+                        if overrides.filename is not None:
+                            newname = f"{str(n)}_{overrides.filename}"
                         else:
                             newname = None
 
@@ -126,12 +132,14 @@ def consume_file(
                         # Move it to consume directory to be picked up
                         # Otherwise, use the current parent to keep possible tags
                         # from subdirectories
-                        try:
-                            # is_relative_to would be nicer, but new in 3.9
-                            _ = path.relative_to(settings.SCRATCH_DIR)
+                        if input_doc.source != DocumentSource.ConsumeFolder:
                             save_to_dir = settings.CONSUMPTION_DIR
-                        except ValueError:
-                            save_to_dir = path.parent
+                        else:
+                            # Note this uses the original file, because it's in the
+                            # consume folder already and may include additional path
+                            # components for tagging
+                            # the .path is somewhere in scratch in this case
+                            save_to_dir = input_doc.original_file.parent
 
                         barcodes.save_to_dir(
                             document,
@@ -139,19 +147,23 @@ def consume_file(
                             target_dir=save_to_dir,
                         )
 
-                    # Delete the PDF file which was split
-                    os.remove(doc_barcode_info.pdf_path)
+                    # This file has been split into multiple files without issue
+                    # remove the original and working copy
+                    input_doc.original_file.unlink()
+                    input_doc.working_file.unlink()
 
-                    # If the original was a TIFF, remove the original file as well
-                    if str(doc_barcode_info.pdf_path) != str(path):
-                        logger.debug(f"Deleting file {path}")
-                        os.unlink(path)
+                    # If the original file was a TIFF, remove the PDF generated from it
+                    if input_doc.mime_type == "image/tiff":
+                        logger.debug(
+                            f"Deleting file {doc_barcode_info.pdf_path}",
+                        )
+                        doc_barcode_info.pdf_path.unlink()
 
                     # notify the sender, otherwise the progress bar
                     # in the UI stays stuck
                     payload = {
-                        "filename": override_filename,
-                        "task_id": task_id,
+                        "filename": overrides.filename or input_doc.path.name,
+                        "task_id": None,
                         "current_progress": 100,
                         "max_progress": 100,
                         "status": "SUCCESS",
@@ -172,7 +184,7 @@ def consume_file(
         if settings.CONSUMER_ENABLE_ASN_BARCODE:
             overrides.asn = barcodes.get_asn_from_barcodes(doc_barcode_info.barcodes)
             if overrides.asn:
-                logger.info(f"Found ASN in barcode: {asn}")
+                logger.info(f"Found ASN in barcode: {overrides.asn}")
 
     # continue with consumption if no barcode was found
     document = Consumer().try_consume_file(

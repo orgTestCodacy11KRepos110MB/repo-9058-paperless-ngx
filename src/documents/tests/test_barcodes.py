@@ -8,18 +8,23 @@ from django.test import TestCase
 from documents import barcodes
 from documents import tasks
 from documents.consumer import ConsumerError
+from documents.data import ConsumeDocument
+from documents.data import DocumentSource
 from documents.tests.utils import DirectoriesMixin
 from PIL import Image
 
 
 class TestBarcode(DirectoriesMixin, TestCase):
 
-    SAMPLE_DIR = os.path.join(
-        os.path.dirname(__file__),
-        "samples",
-    )
+    SAMPLE_DIR = (Path(__file__).parent / Path("samples")).resolve()
 
-    BARCODE_SAMPLE_DIR = os.path.join(SAMPLE_DIR, "barcodes")
+    BARCODE_SAMPLE_DIR = SAMPLE_DIR / Path("barcodes")
+
+    def get_sample_file_path(self, basename: str) -> Path:
+        return self.SAMPLE_DIR / Path(basename)
+
+    def get_barcode_sample_file_path(self, basename: str) -> Path:
+        return self.BARCODE_SAMPLE_DIR / Path(basename)
 
     def test_barcode_reader_png(self):
         """
@@ -880,8 +885,7 @@ class TestAsnBarcodes(DirectoriesMixin, TestCase):
             - The barcode is located
             - The barcode value is correct
         """
-        test_file = os.path.join(
-            self.BARCODE_SAMPLE_DIR,
+        test_file = self.get_barcode_sample_file_path(
             "barcode-39-asn-123.png",
         )
         img = Image.open(test_file)
@@ -898,8 +902,7 @@ class TestAsnBarcodes(DirectoriesMixin, TestCase):
             - The barcode is located
             - The barcode value is correct
         """
-        test_file = os.path.join(
-            self.BARCODE_SAMPLE_DIR,
+        test_file = self.get_barcode_sample_file_path(
             "barcode-39-asn-invalid.png",
         )
         img = Image.open(test_file)
@@ -915,8 +918,7 @@ class TestAsnBarcodes(DirectoriesMixin, TestCase):
             - The barcode is located
             - The barcode value is correct
         """
-        test_file = os.path.join(
-            self.BARCODE_SAMPLE_DIR,
+        test_file = self.get_barcode_sample_file_path(
             "barcode-39-asn-custom-prefix.png",
         )
         img = Image.open(test_file)
@@ -963,6 +965,7 @@ class TestAsnBarcodes(DirectoriesMixin, TestCase):
         )
         doc_barcode_info = barcodes.scan_file_for_barcodes(
             test_file,
+            "application/pdf",
         )
 
         asn = barcodes.get_asn_from_barcodes(doc_barcode_info.barcodes)
@@ -1009,12 +1012,12 @@ class TestAsnBarcodes(DirectoriesMixin, TestCase):
             - The ASN is located
             - The ASN integer value is correct
         """
-        test_file = os.path.join(
-            self.BARCODE_SAMPLE_DIR,
+        test_file = self.get_barcode_sample_file_path(
             "barcode-39-asn-123.pdf",
         )
         doc_barcode_info = barcodes.scan_file_for_barcodes(
             test_file,
+            "application/pdf",
         )
         asn = barcodes.get_asn_from_barcodes(doc_barcode_info.barcodes)
 
@@ -1030,12 +1033,12 @@ class TestAsnBarcodes(DirectoriesMixin, TestCase):
         THEN:
             - No ASN is retrieved from the document
         """
-        test_file = os.path.join(
-            self.BARCODE_SAMPLE_DIR,
+        test_file = self.get_barcode_sample_file_path(
             "patch-code-t.pdf",
         )
         doc_barcode_info = barcodes.scan_file_for_barcodes(
             test_file,
+            "application/pdf",
         )
         asn = barcodes.get_asn_from_barcodes(doc_barcode_info.barcodes)
 
@@ -1062,10 +1065,12 @@ class TestAsnBarcodes(DirectoriesMixin, TestCase):
         dst = os.path.join(self.dirs.scratch_dir, "barcode-128-asn-too-large.pdf")
         shutil.copy(src, dst)
 
+        input_doc = ConsumeDocument(DocumentSource.ConsumeFolder, dst)
+
         with mock.patch("documents.consumer.Consumer._send_progress"):
             self.assertRaisesMessage(
                 ConsumerError,
                 "Given ASN 4294967296 is out of range [0, 4,294,967,295]",
                 tasks.consume_file,
-                dst,
+                input_doc.as_dict(),
             )

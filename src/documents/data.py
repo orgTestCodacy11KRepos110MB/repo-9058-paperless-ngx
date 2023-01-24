@@ -128,10 +128,10 @@ class ConsumeDocument:
         strings and ints
         """
         return {
-            "source": self.source,
-            "original_file": str(self.path),
-            "mime_type": int(self.mime_type),
+            "source": int(self.source),
+            "original_file": str(self.original_file),
             "working_file": str(self.working_file) if self.working_file else None,
+            "mime_type": self.mime_type,
         }
 
     @staticmethod
