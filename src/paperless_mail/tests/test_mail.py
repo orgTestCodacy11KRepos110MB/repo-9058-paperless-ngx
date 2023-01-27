@@ -16,6 +16,7 @@ from documents.data import ConsumeDocument
 from documents.data import DocumentOverrides
 from documents.models import Correspondent
 from documents.tests.utils import DirectoriesMixin
+from documents.utils import DocumentConsumeDelayMixin
 from imap_tools import EmailAddress
 from imap_tools import FolderInfo
 from imap_tools import MailboxFolderSelectError
@@ -243,16 +244,12 @@ def fake_magic_from_buffer(buffer, mime=False):
 
 
 @mock.patch("paperless_mail.mail.magic.from_buffer", fake_magic_from_buffer)
-class TestMail(DirectoriesMixin, TestCase):
+class TestMail(DirectoriesMixin, DocumentConsumeDelayMixin, TestCase):
     def setUp(self):
         patcher = mock.patch("paperless_mail.mail.MailBox")
         m = patcher.start()
         self.bogus_mailbox = BogusMailBox()
         m.return_value = self.bogus_mailbox
-        self.addCleanup(patcher.stop)
-
-        patcher = mock.patch("paperless_mail.mail.consume_file.delay")
-        self.async_task = patcher.start()
         self.addCleanup(patcher.stop)
 
         self.reset_bogus_mailbox()
@@ -388,20 +385,14 @@ class TestMail(DirectoriesMixin, TestCase):
 
         self.assertEqual(self.async_task.call_count, 2)
 
-        args, _ = self.async_task.call_args_list[0]
-        input_doc, overrides = args
-        input_doc: ConsumeDocument = ConsumeDocument.from_dict(input_doc)
-        overrides: DocumentOverrides = DocumentOverrides.from_dict(overrides)
+        input_doc, overrides = self.get_specific_consume_delay_call_args(0)
 
         self.assertTrue(input_doc.path.exists())
 
         self.assertEqual(overrides.title, "file_0")
         self.assertEqual(overrides.filename, "file_0.pdf")
 
-        args, _ = self.async_task.call_args_list[1]
-        input_doc, overrides = args
-        input_doc: ConsumeDocument = ConsumeDocument.from_dict(input_doc)
-        overrides: DocumentOverrides = DocumentOverrides.from_dict(overrides)
+        input_doc, overrides = self.get_specific_consume_delay_call_args(1)
 
         self.assertTrue(input_doc.path.exists())
 
@@ -443,10 +434,7 @@ class TestMail(DirectoriesMixin, TestCase):
         self.assertEqual(result, 1)
         self.assertEqual(self.async_task.call_count, 1)
 
-        args, _ = self.async_task.call_args
-        input_doc, overrides = args
-        input_doc: ConsumeDocument = ConsumeDocument.from_dict(input_doc)
-        overrides: DocumentOverrides = DocumentOverrides.from_dict(overrides)
+        input_doc, overrides = self.get_last_consume_delay_call_args()
 
         self.assertTrue(input_doc.path.exists())
         self.assertEqual(overrides.filename, "f1.pdf")
@@ -475,10 +463,7 @@ class TestMail(DirectoriesMixin, TestCase):
         self.assertEqual(result, 1)
         self.assertEqual(self.async_task.call_count, 1)
 
-        args, _ = self.async_task.call_args
-        input_doc, overrides = args
-        input_doc: ConsumeDocument = ConsumeDocument.from_dict(input_doc)
-        overrides: DocumentOverrides = DocumentOverrides.from_dict(overrides)
+        input_doc, overrides = self.get_last_consume_delay_call_args()
 
         self.assertEqual(overrides.filename, "f2.pdf")
 
@@ -545,9 +530,7 @@ class TestMail(DirectoriesMixin, TestCase):
             self.assertEqual(result, len(matches), f"Error with pattern: {pattern}")
 
             filenames = []
-            for args, _ in self.async_task.call_args_list:
-                _, overrides = args
-                overrides: DocumentOverrides = DocumentOverrides.from_dict(overrides)
+            for _, overrides in self.get_all_consume_delay_call_args():
                 filenames.append(overrides.filename)
 
             self.assertCountEqual(filenames, matches)

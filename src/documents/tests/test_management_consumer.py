@@ -17,6 +17,7 @@ from documents.data import DocumentOverrides
 from documents.management.commands import document_consumer
 from documents.models import Tag
 from documents.tests.utils import DirectoriesMixin
+from documents.tests.utils import DocumentConsumeDelayMixin
 
 
 class ConsumerThread(Thread):
@@ -38,7 +39,11 @@ def chunked(size, source):
         yield source[i : i + size]
 
 
-class ConsumerMixin:
+class ConsumerThreadMixin(DocumentConsumeDelayMixin):
+    """
+    Provides a thread which runs the consumer management command at setUp
+    and stops it at tearDown
+    """
 
     sample_file: Path = (
         Path(__file__).parent / Path("samples") / Path("simple.pdf")
@@ -47,11 +52,6 @@ class ConsumerMixin:
     def setUp(self) -> None:
         super().setUp()
         self.t = None
-        patcher = mock.patch(
-            "documents.tasks.consume_file.delay",
-        )
-        self.task_mock = patcher.start()
-        self.addCleanup(patcher.stop)
 
     def t_start(self):
         self.t = ConsumerThread()
@@ -72,7 +72,7 @@ class ConsumerMixin:
     def wait_for_task_mock_call(self, expected_call_count=1):
         n = 0
         while n < 50:
-            if self.task_mock.call_count >= expected_call_count:
+            if self.consume_file_mock.call_count >= expected_call_count:
                 # give task_mock some time to finish and raise errors
                 sleep(1)
                 return
@@ -116,7 +116,7 @@ class ConsumerMixin:
 @override_settings(
     CONSUMER_INOTIFY_DELAY=0.01,
 )
-class TestConsumer(DirectoriesMixin, ConsumerMixin, TransactionTestCase):
+class TestConsumer(DirectoriesMixin, ConsumerThreadMixin, TransactionTestCase):
     def test_consume_file(self):
         self.t_start()
 
@@ -125,11 +125,9 @@ class TestConsumer(DirectoriesMixin, ConsumerMixin, TransactionTestCase):
 
         self.wait_for_task_mock_call()
 
-        self.task_mock.assert_called_once()
+        self.consume_file_mock.assert_called_once()
 
-        args, _ = self.task_mock.call_args
-        input_doc, _ = args
-        input_doc: ConsumeDocument = ConsumeDocument.from_dict(input_doc)
+        input_doc, _ = self.get_last_consume_delay_call_args()
 
         self.assertEqual(input_doc.original_file, f)
 
@@ -141,25 +139,23 @@ class TestConsumer(DirectoriesMixin, ConsumerMixin, TransactionTestCase):
 
         self.wait_for_task_mock_call()
 
-        self.task_mock.assert_not_called()
+        self.consume_file_mock.assert_not_called()
 
     def test_consume_existing_file(self):
         f = Path(os.path.join(self.dirs.consumption_dir, "my_file.pdf"))
         shutil.copy(self.sample_file, f)
 
         self.t_start()
-        self.task_mock.assert_called_once()
+        self.consume_file_mock.assert_called_once()
 
-        args, _ = self.task_mock.call_args
-        input_doc, _ = args
-        input_doc: ConsumeDocument = ConsumeDocument.from_dict(input_doc)
+        input_doc, _ = self.get_last_consume_delay_call_args()
 
         self.assertEqual(input_doc.original_file, f)
 
     @mock.patch("documents.management.commands.document_consumer.logger.error")
     def test_slow_write_pdf(self, error_logger):
 
-        self.task_mock.side_effect = self.bogus_task
+        self.consume_file_mock.side_effect = self.bogus_task
 
         self.t_start()
 
@@ -171,18 +167,16 @@ class TestConsumer(DirectoriesMixin, ConsumerMixin, TransactionTestCase):
 
         error_logger.assert_not_called()
 
-        self.task_mock.assert_called_once()
+        self.consume_file_mock.assert_called_once()
 
-        args, _ = self.task_mock.call_args
-        input_doc, _ = args
-        input_doc: ConsumeDocument = ConsumeDocument.from_dict(input_doc)
+        input_doc, _ = self.get_last_consume_delay_call_args()
 
         self.assertEqual(input_doc.original_file, fname)
 
     @mock.patch("documents.management.commands.document_consumer.logger.error")
     def test_slow_write_and_move(self, error_logger):
 
-        self.task_mock.side_effect = self.bogus_task
+        self.consume_file_mock.side_effect = self.bogus_task
 
         self.t_start()
 
@@ -194,11 +188,9 @@ class TestConsumer(DirectoriesMixin, ConsumerMixin, TransactionTestCase):
 
         self.wait_for_task_mock_call()
 
-        self.task_mock.assert_called_once()
+        self.consume_file_mock.assert_called_once()
 
-        args, _ = self.task_mock.call_args
-        input_doc, _ = args
-        input_doc: ConsumeDocument = ConsumeDocument.from_dict(input_doc)
+        input_doc, _ = self.get_last_consume_delay_call_args()
 
         self.assertEqual(input_doc.original_file, fname2)
 
@@ -207,7 +199,7 @@ class TestConsumer(DirectoriesMixin, ConsumerMixin, TransactionTestCase):
     @mock.patch("documents.management.commands.document_consumer.logger.error")
     def test_slow_write_incomplete(self, error_logger):
 
-        self.task_mock.side_effect = self.bogus_task
+        self.consume_file_mock.side_effect = self.bogus_task
 
         self.t_start()
 
@@ -216,11 +208,9 @@ class TestConsumer(DirectoriesMixin, ConsumerMixin, TransactionTestCase):
 
         self.wait_for_task_mock_call()
 
-        self.task_mock.assert_called_once()
+        self.consume_file_mock.assert_called_once()
 
-        args, _ = self.task_mock.call_args
-        input_doc, _ = args
-        input_doc: ConsumeDocument = ConsumeDocument.from_dict(input_doc)
+        input_doc, _ = self.get_last_consume_delay_call_args()
 
         self.assertEqual(input_doc.original_file, fname)
 
@@ -238,7 +228,7 @@ class TestConsumer(DirectoriesMixin, ConsumerMixin, TransactionTestCase):
         self.assertRaises(CommandError, call_command, "document_consumer", "--oneshot")
 
     def test_mac_write(self):
-        self.task_mock.side_effect = self.bogus_task
+        self.consume_file_mock.side_effect = self.bogus_task
 
         self.t_start()
 
@@ -267,12 +257,10 @@ class TestConsumer(DirectoriesMixin, ConsumerMixin, TransactionTestCase):
 
         self.wait_for_task_mock_call(expected_call_count=2)
 
-        self.assertEqual(2, self.task_mock.call_count)
+        self.assertEqual(2, self.consume_file_mock.call_count)
 
         consumed_files = []
-        for args, _ in self.task_mock.call_args_list:
-            input_doc, _ = args
-            input_doc: ConsumeDocument = ConsumeDocument.from_dict(input_doc)
+        for input_doc, _ in self.get_all_consume_delay_call_args():
             consumed_files.append(input_doc.original_file.name)
 
         self.assertCountEqual(consumed_files, ["my_file.pdf", "my_second_file.pdf"])
@@ -310,7 +298,7 @@ class TestConsumer(DirectoriesMixin, ConsumerMixin, TransactionTestCase):
 
         self.wait_for_task_mock_call()
 
-        self.task_mock.assert_not_called()
+        self.consume_file_mock.assert_not_called()
 
 
 @override_settings(
@@ -342,7 +330,7 @@ class TestConsumerRecursivePolling(TestConsumer):
     pass
 
 
-class TestConsumerTags(DirectoriesMixin, ConsumerMixin, TransactionTestCase):
+class TestConsumerTags(DirectoriesMixin, ConsumerThreadMixin, TransactionTestCase):
     @override_settings(CONSUMER_RECURSIVE=True, CONSUMER_SUBDIRS_AS_TAGS=True)
     def test_consume_file_with_path_tags(self):
 
@@ -364,15 +352,12 @@ class TestConsumerTags(DirectoriesMixin, ConsumerMixin, TransactionTestCase):
 
         self.wait_for_task_mock_call()
 
-        self.task_mock.assert_called_once()
+        self.consume_file_mock.assert_called_once()
 
         # Add the pk of the Tag created by _consume()
         tag_ids.append(Tag.objects.get(name=tag_names[1]).pk)
 
-        args, _ = self.task_mock.call_args
-        input_doc, overrides = args
-        input_doc: ConsumeDocument = ConsumeDocument.from_dict(input_doc)
-        overrides: DocumentOverrides = DocumentOverrides.from_dict(overrides)
+        input_doc, overrides = self.get_last_consume_delay_call_args()
 
         self.assertEqual(input_doc.original_file, f)
 
