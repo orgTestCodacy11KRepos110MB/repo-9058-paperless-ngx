@@ -12,6 +12,8 @@ from unittest import mock
 from django.core.management import call_command
 from django.db import DatabaseError
 from django.test import TestCase
+from documents.data import ConsumeDocument
+from documents.data import DocumentOverrides
 from documents.models import Correspondent
 from documents.tests.utils import DirectoriesMixin
 from imap_tools import EmailAddress
@@ -384,20 +386,27 @@ class TestMail(DirectoriesMixin, TestCase):
 
         self.assertEqual(result, 2)
 
-        self.assertEqual(len(self.async_task.call_args_list), 2)
+        self.assertEqual(self.async_task.call_count, 2)
 
-        args1, kwargs1 = self.async_task.call_args_list[0]
-        args2, kwargs2 = self.async_task.call_args_list[1]
+        args, _ = self.async_task.call_args_list[0]
+        input_doc, overrides = args
+        input_doc: ConsumeDocument = ConsumeDocument.from_dict(input_doc)
+        overrides: DocumentOverrides = DocumentOverrides.from_dict(overrides)
 
-        self.assertTrue(os.path.isfile(kwargs1["path"]), kwargs1["path"])
+        self.assertTrue(input_doc.path.exists())
 
-        self.assertEqual(kwargs1["override_title"], "file_0")
-        self.assertEqual(kwargs1["override_filename"], "file_0.pdf")
+        self.assertEqual(overrides.title, "file_0")
+        self.assertEqual(overrides.filename, "file_0.pdf")
 
-        self.assertTrue(os.path.isfile(kwargs2["path"]), kwargs1["path"])
+        args, _ = self.async_task.call_args_list[1]
+        input_doc, overrides = args
+        input_doc: ConsumeDocument = ConsumeDocument.from_dict(input_doc)
+        overrides: DocumentOverrides = DocumentOverrides.from_dict(overrides)
 
-        self.assertEqual(kwargs2["override_title"], "file_1")
-        self.assertEqual(kwargs2["override_filename"], "file_1.pdf")
+        self.assertTrue(input_doc.path.exists())
+
+        self.assertEqual(overrides.title, "file_1")
+        self.assertEqual(overrides.filename, "file_1.pdf")
 
     def test_handle_empty_message(self):
         message = namedtuple("MailMessage", [])
@@ -434,9 +443,13 @@ class TestMail(DirectoriesMixin, TestCase):
         self.assertEqual(result, 1)
         self.assertEqual(self.async_task.call_count, 1)
 
-        args, kwargs = self.async_task.call_args
-        self.assertTrue(os.path.isfile(kwargs["path"]), kwargs["path"])
-        self.assertEqual(kwargs["override_filename"], "f1.pdf")
+        args, _ = self.async_task.call_args
+        input_doc, overrides = args
+        input_doc: ConsumeDocument = ConsumeDocument.from_dict(input_doc)
+        overrides: DocumentOverrides = DocumentOverrides.from_dict(overrides)
+
+        self.assertTrue(input_doc.path.exists())
+        self.assertEqual(overrides.filename, "f1.pdf")
 
     def test_handle_disposition(self):
         message = create_message(
@@ -462,8 +475,12 @@ class TestMail(DirectoriesMixin, TestCase):
         self.assertEqual(result, 1)
         self.assertEqual(self.async_task.call_count, 1)
 
-        args, kwargs = self.async_task.call_args
-        self.assertEqual(kwargs["override_filename"], "f2.pdf")
+        args, _ = self.async_task.call_args
+        input_doc, overrides = args
+        input_doc: ConsumeDocument = ConsumeDocument.from_dict(input_doc)
+        overrides: DocumentOverrides = DocumentOverrides.from_dict(overrides)
+
+        self.assertEqual(overrides.filename, "f2.pdf")
 
     def test_handle_inline_files(self):
         message = create_message(
@@ -526,10 +543,14 @@ class TestMail(DirectoriesMixin, TestCase):
             result = self.mail_account_handler.handle_message(message, rule)
 
             self.assertEqual(result, len(matches), f"Error with pattern: {pattern}")
-            filenames = sorted(
-                a[1]["override_filename"] for a in self.async_task.call_args_list
-            )
-            self.assertListEqual(filenames, matches)
+
+            filenames = []
+            for args, _ in self.async_task.call_args_list:
+                _, overrides = args
+                overrides: DocumentOverrides = DocumentOverrides.from_dict(overrides)
+                filenames.append(overrides.filename)
+
+            self.assertCountEqual(filenames, matches)
 
     def test_handle_mail_account_mark_read(self):
 
@@ -898,11 +919,15 @@ class TestMail(DirectoriesMixin, TestCase):
         self.mail_account_handler.handle_mail_account(account)
 
         self.async_task.assert_called_once()
-        args, kwargs = self.async_task.call_args
+
+        args, _ = self.async_task.call_args
+        input_doc, overrides = args
+        input_doc: ConsumeDocument = ConsumeDocument.from_dict(input_doc)
+        overrides: DocumentOverrides = DocumentOverrides.from_dict(overrides)
 
         c = Correspondent.objects.get(name="amazon@amazon.de")
         # should work
-        self.assertEqual(kwargs["override_correspondent_id"], c.id)
+        self.assertEqual(overrides.correspondent_id, c.id)
 
         self.async_task.reset_mock()
         self.reset_bogus_mailbox()
@@ -912,9 +937,13 @@ class TestMail(DirectoriesMixin, TestCase):
 
             self.mail_account_handler.handle_mail_account(account)
 
-        args, kwargs = self.async_task.call_args
+        args, _ = self.async_task.call_args
+        input_doc, overrides = args
+        input_doc: ConsumeDocument = ConsumeDocument.from_dict(input_doc)
+        overrides: DocumentOverrides = DocumentOverrides.from_dict(overrides)
+
         self.async_task.assert_called_once()
-        self.assertEqual(kwargs["override_correspondent_id"], None)
+        self.assertEqual(overrides.correspondent_id, None)
 
     def test_filters(self):
 
