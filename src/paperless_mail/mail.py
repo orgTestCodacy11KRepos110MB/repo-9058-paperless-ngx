@@ -11,6 +11,9 @@ import magic
 import pathvalidate
 from django.conf import settings
 from django.db import DatabaseError
+from documents.data import ConsumeDocument
+from documents.data import DocumentOverrides
+from documents.data import DocumentSource
 from documents.loggers import LoggingMixin
 from documents.models import Correspondent
 from documents.parsers import is_mime_type_supported
@@ -518,17 +521,18 @@ class MailAccountHandler(LoggingMixin):
                     f"{message.subject} from {message.from_}",
                 )
 
+                input_doc = ConsumeDocument(DocumentSource.MailFetch, temp_filename)
+                doc_overrides = DocumentOverrides(
+                    title=title,
+                    filename=pathvalidate.sanitize_filename(att.filename),
+                    correspondent_id=correspondent.id if correspondent else None,
+                    document_type_id=doc_type.id if doc_type else None,
+                    tag_ids=tag_ids,
+                )
+
                 consume_file.delay(
-                    path=temp_filename,
-                    override_filename=pathvalidate.sanitize_filename(
-                        att.filename,
-                    ),
-                    override_title=title,
-                    override_correspondent_id=correspondent.id
-                    if correspondent
-                    else None,
-                    override_document_type_id=doc_type.id if doc_type else None,
-                    override_tag_ids=tag_ids,
+                    input_doc.as_dict(),
+                    doc_overrides.as_dict(),
                 )
 
                 processed_attachments += 1
@@ -584,15 +588,18 @@ class MailAccountHandler(LoggingMixin):
             f"{message.subject} from {message.from_}",
         )
 
+        input_doc = ConsumeDocument(DocumentSource.MailFetch, temp_filename)
+        doc_overrides = DocumentOverrides(
+            title=message.subject,
+            filename=pathvalidate.sanitize_filename(f"{message.subject}.eml"),
+            correspondent_id=correspondent.id if correspondent else None,
+            document_type_id=doc_type.id if doc_type else None,
+            tag_ids=tag_ids,
+        )
+
         consume_file.delay(
-            path=temp_filename,
-            override_filename=pathvalidate.sanitize_filename(
-                message.subject + ".eml",
-            ),
-            override_title=message.subject,
-            override_correspondent_id=correspondent.id if correspondent else None,
-            override_document_type_id=doc_type.id if doc_type else None,
-            override_tag_ids=tag_ids,
+            input_doc.as_dict(),
+            doc_overrides.as_dict(),
         )
         processed_elements = 1
         return processed_elements
