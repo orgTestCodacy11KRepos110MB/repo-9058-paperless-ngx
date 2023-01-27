@@ -1,6 +1,5 @@
 import dataclasses
 import email.contentmanager
-import os
 import random
 import uuid
 from collections import namedtuple
@@ -12,11 +11,9 @@ from unittest import mock
 from django.core.management import call_command
 from django.db import DatabaseError
 from django.test import TestCase
-from documents.data import ConsumeDocument
-from documents.data import DocumentOverrides
 from documents.models import Correspondent
 from documents.tests.utils import DirectoriesMixin
-from documents.utils import DocumentConsumeDelayMixin
+from documents.tests.utils import DocumentConsumeDelayMixin
 from imap_tools import EmailAddress
 from imap_tools import FolderInfo
 from imap_tools import MailboxFolderSelectError
@@ -383,7 +380,7 @@ class TestMail(DirectoriesMixin, DocumentConsumeDelayMixin, TestCase):
 
         self.assertEqual(result, 2)
 
-        self.assertEqual(self.async_task.call_count, 2)
+        self.assertEqual(self.consume_file_mock.call_count, 2)
 
         input_doc, overrides = self.get_specific_consume_delay_call_args(0)
 
@@ -407,7 +404,7 @@ class TestMail(DirectoriesMixin, DocumentConsumeDelayMixin, TestCase):
 
         result = self.mail_account_handler.handle_message(message, rule)
 
-        self.assertFalse(self.async_task.called)
+        self.consume_file_mock.assert_not_called()
         self.assertEqual(result, 0)
 
     def test_handle_unknown_mime_type(self):
@@ -432,7 +429,7 @@ class TestMail(DirectoriesMixin, DocumentConsumeDelayMixin, TestCase):
         result = self.mail_account_handler.handle_message(message, rule)
 
         self.assertEqual(result, 1)
-        self.assertEqual(self.async_task.call_count, 1)
+        self.assertEqual(self.consume_file_mock.call_count, 1)
 
         input_doc, overrides = self.get_last_consume_delay_call_args()
 
@@ -461,7 +458,7 @@ class TestMail(DirectoriesMixin, DocumentConsumeDelayMixin, TestCase):
         result = self.mail_account_handler.handle_message(message, rule)
 
         self.assertEqual(result, 1)
-        self.assertEqual(self.async_task.call_count, 1)
+        self.assertEqual(self.consume_file_mock.call_count, 1)
 
         input_doc, overrides = self.get_last_consume_delay_call_args()
 
@@ -490,7 +487,7 @@ class TestMail(DirectoriesMixin, DocumentConsumeDelayMixin, TestCase):
         result = self.mail_account_handler.handle_message(message, rule)
 
         self.assertEqual(result, 2)
-        self.assertEqual(self.async_task.call_count, 2)
+        self.assertEqual(self.consume_file_mock.call_count, 2)
 
     def test_filename_filter(self):
         message = create_message(
@@ -514,7 +511,7 @@ class TestMail(DirectoriesMixin, DocumentConsumeDelayMixin, TestCase):
 
         for (pattern, matches) in tests:
             matches.sort()
-            self.async_task.reset_mock()
+            self.consume_file_mock.reset_mock()
             account = MailAccount(name=str(uuid.uuid4()))
             account.save()
             rule = MailRule(
@@ -551,10 +548,10 @@ class TestMail(DirectoriesMixin, DocumentConsumeDelayMixin, TestCase):
         )
 
         self.assertEqual(len(self.bogus_mailbox.messages), 3)
-        self.assertEqual(self.async_task.call_count, 0)
+        self.assertEqual(self.consume_file_mock.call_count, 0)
         self.assertEqual(len(self.bogus_mailbox.fetch("UNSEEN", False)), 2)
         self.mail_account_handler.handle_mail_account(account)
-        self.assertEqual(self.async_task.call_count, 2)
+        self.assertEqual(self.consume_file_mock.call_count, 2)
         self.assertEqual(len(self.bogus_mailbox.fetch("UNSEEN", False)), 0)
         self.assertEqual(len(self.bogus_mailbox.messages), 3)
 
@@ -574,10 +571,10 @@ class TestMail(DirectoriesMixin, DocumentConsumeDelayMixin, TestCase):
             filter_subject="Invoice",
         )
 
-        self.assertEqual(self.async_task.call_count, 0)
+        self.assertEqual(self.consume_file_mock.call_count, 0)
         self.assertEqual(len(self.bogus_mailbox.messages), 3)
         self.mail_account_handler.handle_mail_account(account)
-        self.assertEqual(self.async_task.call_count, 2)
+        self.assertEqual(self.consume_file_mock.call_count, 2)
         self.assertEqual(len(self.bogus_mailbox.messages), 1)
 
     def test_handle_mail_account_flag(self):
@@ -596,10 +593,10 @@ class TestMail(DirectoriesMixin, DocumentConsumeDelayMixin, TestCase):
         )
 
         self.assertEqual(len(self.bogus_mailbox.messages), 3)
-        self.assertEqual(self.async_task.call_count, 0)
+        self.assertEqual(self.consume_file_mock.call_count, 0)
         self.assertEqual(len(self.bogus_mailbox.fetch("UNFLAGGED", False)), 2)
         self.mail_account_handler.handle_mail_account(account)
-        self.assertEqual(self.async_task.call_count, 1)
+        self.assertEqual(self.consume_file_mock.call_count, 1)
         self.assertEqual(len(self.bogus_mailbox.fetch("UNFLAGGED", False)), 1)
         self.assertEqual(len(self.bogus_mailbox.messages), 3)
 
@@ -619,13 +616,13 @@ class TestMail(DirectoriesMixin, DocumentConsumeDelayMixin, TestCase):
             filter_subject="Claim",
         )
 
-        self.assertEqual(self.async_task.call_count, 0)
+        self.assertEqual(self.consume_file_mock.call_count, 0)
         self.assertEqual(len(self.bogus_mailbox.messages), 3)
         self.assertEqual(len(self.bogus_mailbox.messages_spam), 0)
 
         self.mail_account_handler.handle_mail_account(account)
 
-        self.assertEqual(self.async_task.call_count, 1)
+        self.assertEqual(self.consume_file_mock.call_count, 1)
         self.assertEqual(len(self.bogus_mailbox.messages), 2)
         self.assertEqual(len(self.bogus_mailbox.messages_spam), 1)
 
@@ -645,10 +642,10 @@ class TestMail(DirectoriesMixin, DocumentConsumeDelayMixin, TestCase):
         )
 
         self.assertEqual(len(self.bogus_mailbox.messages), 3)
-        self.assertEqual(self.async_task.call_count, 0)
+        self.assertEqual(self.consume_file_mock.call_count, 0)
         self.assertEqual(len(self.bogus_mailbox.fetch("UNKEYWORD processed", False)), 2)
         self.mail_account_handler.handle_mail_account(account)
-        self.assertEqual(self.async_task.call_count, 2)
+        self.assertEqual(self.consume_file_mock.call_count, 2)
         self.assertEqual(len(self.bogus_mailbox.fetch("UNKEYWORD processed", False)), 0)
         self.assertEqual(len(self.bogus_mailbox.messages), 3)
 
@@ -671,11 +668,11 @@ class TestMail(DirectoriesMixin, DocumentConsumeDelayMixin, TestCase):
         )
 
         self.assertEqual(len(self.bogus_mailbox.messages), 3)
-        self.assertEqual(self.async_task.call_count, 0)
+        self.assertEqual(self.consume_file_mock.call_count, 0)
         criteria = NOT(gmail_label="processed")
         self.assertEqual(len(self.bogus_mailbox.fetch(criteria, False)), 2)
         self.mail_account_handler.handle_mail_account(account)
-        self.assertEqual(self.async_task.call_count, 2)
+        self.assertEqual(self.consume_file_mock.call_count, 2)
         self.assertEqual(len(self.bogus_mailbox.fetch(criteria, False)), 0)
         self.assertEqual(len(self.bogus_mailbox.messages), 3)
 
@@ -705,10 +702,10 @@ class TestMail(DirectoriesMixin, DocumentConsumeDelayMixin, TestCase):
         )
 
         self.assertEqual(len(self.bogus_mailbox.messages), 3)
-        self.assertEqual(self.async_task.call_count, 0)
+        self.assertEqual(self.consume_file_mock.call_count, 0)
         self.assertEqual(len(self.bogus_mailbox.fetch("UNFLAGGED", False)), 2)
         self.mail_account_handler.handle_mail_account(account)
-        self.assertEqual(self.async_task.call_count, 2)
+        self.assertEqual(self.consume_file_mock.call_count, 2)
         self.assertEqual(len(self.bogus_mailbox.fetch("UNFLAGGED", False)), 0)
         self.assertEqual(len(self.bogus_mailbox.messages), 3)
 
@@ -749,7 +746,7 @@ class TestMail(DirectoriesMixin, DocumentConsumeDelayMixin, TestCase):
         )
 
         tasks.process_mail_accounts()
-        self.assertEqual(self.async_task.call_count, 1)
+        self.assertEqual(self.consume_file_mock.call_count, 1)
         self.assertEqual(len(self.bogus_mailbox.messages), 2)
         self.assertEqual(len(self.bogus_mailbox.messages_spam), 1)
 
@@ -780,7 +777,7 @@ class TestMail(DirectoriesMixin, DocumentConsumeDelayMixin, TestCase):
         )
 
         self.mail_account_handler.handle_mail_account(account)
-        self.assertEqual(self.async_task.call_count, 1)
+        self.assertEqual(self.consume_file_mock.call_count, 1)
         self.assertEqual(len(self.bogus_mailbox.messages), 2)
         self.assertEqual(len(self.bogus_mailbox.messages_spam), 1)
 
@@ -815,7 +812,7 @@ class TestMail(DirectoriesMixin, DocumentConsumeDelayMixin, TestCase):
         self.mail_account_handler.handle_mail_account(account)
 
         self.bogus_mailbox.folder.list.assert_called_once()
-        self.assertEqual(self.async_task.call_count, 0)
+        self.assertEqual(self.consume_file_mock.call_count, 0)
 
     def test_error_folder_set_error_listing(self):
         """
@@ -848,7 +845,7 @@ class TestMail(DirectoriesMixin, DocumentConsumeDelayMixin, TestCase):
         self.mail_account_handler.handle_mail_account(account)
 
         self.bogus_mailbox.folder.list.assert_called_once()
-        self.assertEqual(self.async_task.call_count, 0)
+        self.assertEqual(self.consume_file_mock.call_count, 0)
 
     @mock.patch("paperless_mail.mail.MailAccountHandler.get_correspondent")
     def test_error_skip_mail(self, m):
@@ -876,7 +873,7 @@ class TestMail(DirectoriesMixin, DocumentConsumeDelayMixin, TestCase):
         self.mail_account_handler.handle_mail_account(account)
 
         # test that we still consume mail even if some mails throw errors.
-        self.assertEqual(self.async_task.call_count, 2)
+        self.assertEqual(self.consume_file_mock.call_count, 2)
 
         # faulty mail still in inbox, untouched
         self.assertEqual(len(self.bogus_mailbox.messages), 1)
@@ -901,18 +898,15 @@ class TestMail(DirectoriesMixin, DocumentConsumeDelayMixin, TestCase):
 
         self.mail_account_handler.handle_mail_account(account)
 
-        self.async_task.assert_called_once()
+        self.consume_file_mock.assert_called_once()
 
-        args, _ = self.async_task.call_args
-        input_doc, overrides = args
-        input_doc: ConsumeDocument = ConsumeDocument.from_dict(input_doc)
-        overrides: DocumentOverrides = DocumentOverrides.from_dict(overrides)
+        _, overrides = self.get_last_consume_delay_call_args()
 
         c = Correspondent.objects.get(name="amazon@amazon.de")
         # should work
         self.assertEqual(overrides.correspondent_id, c.id)
 
-        self.async_task.reset_mock()
+        self.consume_file_mock.reset_mock()
         self.reset_bogus_mailbox()
 
         with mock.patch("paperless_mail.mail.Correspondent.objects.get_or_create") as m:
@@ -920,12 +914,10 @@ class TestMail(DirectoriesMixin, DocumentConsumeDelayMixin, TestCase):
 
             self.mail_account_handler.handle_mail_account(account)
 
-        args, _ = self.async_task.call_args
-        input_doc, overrides = args
-        input_doc: ConsumeDocument = ConsumeDocument.from_dict(input_doc)
-        overrides: DocumentOverrides = DocumentOverrides.from_dict(overrides)
+        self.consume_file_mock.assert_called_once()
 
-        self.async_task.assert_called_once()
+        _, overrides = self.get_last_consume_delay_call_args()
+
         self.assertEqual(overrides.correspondent_id, None)
 
     def test_filters(self):
@@ -943,12 +935,12 @@ class TestMail(DirectoriesMixin, DocumentConsumeDelayMixin, TestCase):
             filter_subject="Claim",
         )
 
-        self.assertEqual(self.async_task.call_count, 0)
+        self.assertEqual(self.consume_file_mock.call_count, 0)
 
         self.assertEqual(len(self.bogus_mailbox.messages), 3)
         self.mail_account_handler.handle_mail_account(account)
         self.assertEqual(len(self.bogus_mailbox.messages), 2)
-        self.assertEqual(self.async_task.call_count, 1)
+        self.assertEqual(self.consume_file_mock.call_count, 1)
 
         self.reset_bogus_mailbox()
 
@@ -958,7 +950,7 @@ class TestMail(DirectoriesMixin, DocumentConsumeDelayMixin, TestCase):
         self.assertEqual(len(self.bogus_mailbox.messages), 3)
         self.mail_account_handler.handle_mail_account(account)
         self.assertEqual(len(self.bogus_mailbox.messages), 2)
-        self.assertEqual(self.async_task.call_count, 2)
+        self.assertEqual(self.consume_file_mock.call_count, 2)
 
         self.reset_bogus_mailbox()
 
@@ -968,7 +960,7 @@ class TestMail(DirectoriesMixin, DocumentConsumeDelayMixin, TestCase):
         self.assertEqual(len(self.bogus_mailbox.messages), 3)
         self.mail_account_handler.handle_mail_account(account)
         self.assertEqual(len(self.bogus_mailbox.messages), 1)
-        self.assertEqual(self.async_task.call_count, 4)
+        self.assertEqual(self.consume_file_mock.call_count, 4)
 
         self.reset_bogus_mailbox()
 
@@ -979,7 +971,7 @@ class TestMail(DirectoriesMixin, DocumentConsumeDelayMixin, TestCase):
         self.assertEqual(len(self.bogus_mailbox.messages), 3)
         self.mail_account_handler.handle_mail_account(account)
         self.assertEqual(len(self.bogus_mailbox.messages), 2)
-        self.assertEqual(self.async_task.call_count, 5)
+        self.assertEqual(self.consume_file_mock.call_count, 5)
 
     def test_auth_plain_fallback(self):
         """
@@ -1003,12 +995,12 @@ class TestMail(DirectoriesMixin, DocumentConsumeDelayMixin, TestCase):
         )
 
         self.assertEqual(len(self.bogus_mailbox.messages), 3)
-        self.assertEqual(self.async_task.call_count, 0)
+        self.assertEqual(self.consume_file_mock.call_count, 0)
         self.assertEqual(len(self.bogus_mailbox.fetch("UNSEEN", False)), 2)
 
         self.mail_account_handler.handle_mail_account(account)
 
-        self.assertEqual(self.async_task.call_count, 2)
+        self.assertEqual(self.consume_file_mock.call_count, 2)
         self.assertEqual(len(self.bogus_mailbox.fetch("UNSEEN", False)), 0)
         self.assertEqual(len(self.bogus_mailbox.messages), 3)
 
