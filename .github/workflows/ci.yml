@@ -13,6 +13,9 @@ on:
     branches-ignore:
       - 'translations**'
 
+permissions:
+  contents: read
+
 env:
   # This is the version of pipenv all the steps will use
   # If changing this, change Dockerfile
@@ -283,6 +286,8 @@ jobs:
   # build and push image to docker hub.
   build-docker-image:
     runs-on: ubuntu-22.04
+    permissions:
+      packages: write
     concurrency:
       group: ${{ github.workflow }}-build-docker-image-${{ github.ref_name }}
       cancel-in-progress: true
